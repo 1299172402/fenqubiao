@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>原始 MHTML 预览</title>
+    <style>
+        :root {
+            --bar-h: 46px;
+            --blue: #3c8dbc;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+        }
+
+        body {
+            font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
+                "Microsoft YaHei", sans-serif;
+            background: #eef1f4;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #bar {
+            flex: 0 0 var(--bar-h);
+            height: var(--bar-h);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px;
+            background: #fff;
+            border-bottom: 1px solid #d6dbe0;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+            z-index: 10;
+        }
+
+        #bar a,
+        #bar button {
+            font: inherit;
+            color: var(--blue);
+            text-decoration: none;
+            background: #f4f7f9;
+            border: 1px solid #d6dbe0;
+            border-radius: 999px;
+            padding: 4px 12px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        #bar a:hover,
+        #bar button:hover {
+            background: var(--blue);
+            border-color: var(--blue);
+            color: #fff;
+        }
+
+        #bar a[hidden],
+        #bar button[hidden] {
+            display: none;
+        }
+
+        #title {
+            flex: 1 1 auto;
+            font-weight: 600;
+            color: #3b444c;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #frame {
+            flex: 1 1 auto;
+            width: 100%;
+            border: 0;
+            background: #fff;
+        }
+
+        #msg {
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            color: #5c6770;
+            text-align: center;
+            padding: 24px;
+        }
+
+        #msg[hidden] {
+            display: none;
+        }
+
+        #msg .big {
+            font-size: 16px;
+            font-weight: 600;
+            color: #3b444c;
+        }
+
+        #msg code {
+            background: #dde3e8;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 12px;
+        }
+
+        .spin {
+            width: 28px;
+            height: 28px;
+            border: 3px solid #cfd8de;
+            border-top-color: var(--blue);
+            border-radius: 50%;
+            animation: sp .8s linear infinite;
+        }
+
+        @keyframes sp {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="bar">
+        <a href="index.html">← 主页</a>
+        <span id="title">原始 MHTML 预览</span>
+        <a id="converted" href="#" hidden>转换版</a>
+        <a id="download" href="#" download hidden>下载</a>
+    </div>
+
+    <div id="msg">
+        <div class="spin"></div>
+        <div class="big">正在解析 MHTML…</div>
+        <div id="hint"></div>
+    </div>
+
+    <iframe id="frame" hidden sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+
+    <script src="assets/vendor/mhtml2html.js"></script>
+    <script>
+        (function () {
+            "use strict";
+
+            var SITE = "advanced.fenqubiao.com";
+            var msgEl = document.getElementById("msg");
+            var hintEl = document.getElementById("hint");
+            var titleEl = document.getElementById("title");
+            var frameEl = document.getElementById("frame");
+            var dlEl = document.getElementById("download");
+            var cvEl = document.getElementById("converted");
+
+            function fail(html) {
+                msgEl.hidden = false;
+                msgEl.innerHTML = html;
+            }
+
+            var rawPath = new URLSearchParams(location.search).get("f");
+            if (!rawPath) {
+                fail('<div class="big">缺少参数</div><div>用法：<code>viewer.html?f=raw/macro/化学.mhtml</code></div>');
+                return;
+            }
+
+            titleEl.textContent = decodeURIComponent(rawPath.split("/").pop() || rawPath);
+            dlEl.href = rawPath;
+            dlEl.hidden = false;
+
+            // 原始路径 -> 转换版页面
+            var converted = null;
+            var m = /^raw\/macro\/(.+)\.mhtml$/.exec(rawPath);
+            if (m) converted = "macro/" + m[1] + ".html";
+            m = /^raw\/meso\/(.+)\.mhtml$/.exec(rawPath);
+            if (m) converted = "meso/" + m[1] + ".html";
+            if (rawPath === "raw/home_macro.mhtml") converted = "index.html";
+            if (rawPath === "raw/home_meso.mhtml") converted = "meso/index.html";
+            if (rawPath === "raw/home_megaj.mhtml") converted = "megajournal.html";
+            if (converted) {
+                cvEl.href = converted;
+                cvEl.hidden = false;
+            }
+
+            /**
+             * 把 MHTML 里指向原站的链接映射成本站的 raw/ 路径。
+             * 返回 null 表示该链接无法本地化（保持原样）。
+             */
+            function toRawPath(href) {
+                var url;
+                try {
+                    url = new URL(href, "https://" + SITE + "/");
+                } catch (e) {
+                    return null;
+                }
+                if (url.hostname !== SITE) return null;
+
+                var path = url.pathname.toLowerCase();
+                var name = url.searchParams.get("name");
+                var year = url.searchParams.get("year");
+                var yearOk = !year || year === "2025";
+
+                if (path.indexOf("/macro/journal") === 0) {
+                    return (name && yearOk) ? "raw/macro/" + name + ".mhtml" : null;
+                }
+                if (path.indexOf("/meso/journal") === 0) {
+                    return (name && yearOk) ? "raw/meso/" + name + ".mhtml" : null;
+                }
+                if (path.indexOf("/meso/index") === 0) return "raw/home_meso.mhtml";
+                if (path.indexOf("/megaj/index") === 0) return "raw/home_megaj.mhtml";
+                if (path.indexOf("/macro/index") === 0) return "raw/home_macro.mhtml";
+                if (url.pathname === "/" || url.pathname === "") return "raw/home_macro.mhtml";
+                return null;
+            }
+
+            /** 在渲染前整理文档：去脚本、改写链接、补 base。 */
+            function prepare(doc, docsBase) {
+                // 1) 去掉所有脚本，避免原站 JS 重新发起 ajax 把静态内容清空
+                Array.prototype.forEach.call(
+                    doc.querySelectorAll("script, iframe, noscript"),
+                    function (n) { n.parentNode.removeChild(n); }
+                );
+                // 2) 去掉已有的 base，避免与我们要插入的冲突
+                Array.prototype.forEach.call(
+                    doc.querySelectorAll("base"), function (n) { n.parentNode.removeChild(n); }
+                );
+
+                // 3) 链接改写
+                Array.prototype.forEach.call(doc.querySelectorAll("a[href]"), function (a) {
+                    var href = a.getAttribute("href");
+                    if (!href || href.charAt(0) === "#") return;
+                    var raw = toRawPath(href);
+                    if (raw) {
+                        a.setAttribute("href", "viewer.html?f=" + encodeURIComponent(raw));
+                        a.removeAttribute("target");
+                        a.removeAttribute("rel");
+                    }
+                });
+
+                // 4) 原站“大类学科”是个 <button>，这里补成链接
+                Array.prototype.forEach.call(doc.querySelectorAll("button"), function (b) {
+                    if ((b.textContent || "").trim() !== "大类学科") return;
+                    var a = doc.createElement("a");
+                    a.setAttribute("href", "viewer.html?f=" + encodeURIComponent("raw/home_macro.mhtml"));
+                    a.className = b.className;
+                    a.textContent = b.textContent;
+                    b.parentNode.replaceChild(a, b);
+                });
+
+                // 5) 插入 <base>，保证相对链接仍指向本站
+                var base = doc.createElement("base");
+                base.setAttribute("href", docsBase);
+                var head = doc.querySelector("head");
+                if (head) head.insertBefore(base, head.firstChild);
+
+                // 6) 顶部留出工具条高度
+                if (doc.body) {
+                    doc.body.style.marginTop = "0";
+                }
+                return doc;
+            }
+
+            fetch(rawPath, { credentials: "same-origin" })
+                .then(function (r) {
+                    if (!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+                    return r.text();
+                })
+                .then(function (text) {
+                    var parsed;
+                    try {
+                        parsed = mhtml2html.convert(text);
+                    } catch (e) {
+                        throw new Error("MHTML 解析失败：" + (e && e.message ? e.message : e));
+                    }
+                    var doc = parsed.window ? parsed.window.document : parsed;
+                    if (!doc || !doc.documentElement) throw new Error("解析结果为空");
+                    if (doc.title) titleEl.textContent = doc.title;
+
+                    var docsBase = new URL(".", location.href).href;
+                    prepare(doc, docsBase);
+
+                    var html = "<!DOCTYPE html>" + doc.documentElement.outerHTML;
+                    var blob = new Blob([html], { type: "text/html;charset=utf-8" });
+                    var url = URL.createObjectURL(blob);
+                    frameEl.onload = function () { URL.revokeObjectURL(url); };
+                    frameEl.src = url;
+                    frameEl.hidden = false;
+                    msgEl.hidden = true;
+                })
+                .catch(function (err) {
+                    var extra = location.protocol === "file:"
+                        ? '<div>本地 <code>file://</code> 下浏览器禁止 fetch，请用 HTTP 服务打开'
+                        + '（例如在 <code>docs</code> 目录运行 <code>python -m http.server</code>）。</div>'
+                        : "";
+                    fail('<div class="big">加载失败</div><div>'
+                        + String(err && err.message ? err.message : err).replace(/[<>&]/g, "")
+                        + "</div>" + extra
+                        + '<div><a href="' + rawPath + '">直接打开原始文件</a></div>');
+                });
+        })();
+    </script>
+</body>
+
+</html>
